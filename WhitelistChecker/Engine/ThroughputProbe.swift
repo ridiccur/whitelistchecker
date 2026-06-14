@@ -42,7 +42,7 @@ enum ThroughputProbe {
 
         return await withCheckedContinuation { (cont: CheckedContinuation<Result, Never>) in
 
-            func finish() {
+            let finish: @Sendable () -> Void = {
                 guard state.finishOnce() else { return }
                 conn.cancel()
                 let secs = state.elapsed()
@@ -97,8 +97,8 @@ enum ThroughputProbe {
     }
 }
 
-/// Состояние одной передачи (потокобезопасное).
-private final class TransferState {
+/// Состояние одной передачи (потокобезопасное — доступ под lock).
+private final class TransferState: @unchecked Sendable {
     private let lock = NSLock()
     private var started: DispatchTime?
     private var finished = false
@@ -135,7 +135,6 @@ private final class TransferState {
         guard let s = started else { return 0 }
         return Double(DispatchTime.now().uptimeNanoseconds - s.uptimeNanoseconds) / 1_000_000_000
     }
-    func markStartIfNeeded() { markStart() }
     func finishOnce() -> Bool {
         lock.lock(); defer { lock.unlock() }
         if finished { return false }

@@ -77,7 +77,7 @@ enum TCPProbe {
 }
 
 /// Потокобезопасный «однократный резолв» континуации.
-private final class Resolved {
+private final class Resolved: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false
     func resolveOnce() -> Bool {

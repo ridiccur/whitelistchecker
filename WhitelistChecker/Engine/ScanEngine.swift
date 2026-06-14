@@ -86,8 +86,7 @@ final class ScanEngine: ObservableObject {
     // MARK: - throughput
 
     private func measureThroughput(_ r: ProbeResult) async {
-        let path = (r.target.kind == .domain || r.target.kind == .ip) ? "/" : "/"
-        let res = await ThroughputProbe.measure(host: r.target.host, path: path,
+        let res = await ThroughputProbe.measure(host: r.target.host, path: "/",
                                                 channel: channel, duration: 10.0)
         r.speedBps = res.bps
         // запомним «заполнено ли окно» через detail для классификатора
