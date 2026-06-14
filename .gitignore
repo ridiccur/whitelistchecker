@@ -1,0 +1,15 @@
+# Xcode build
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+
+# Output artifacts
+dist/*.ipa
+
+# macOS
+.DS_Store
+
+# Misc
+*.swiftpm
+.build/
