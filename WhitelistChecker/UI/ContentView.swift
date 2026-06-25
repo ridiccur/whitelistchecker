@@ -16,15 +16,18 @@ struct ContentView: View {
                     .ignoresSafeArea()
                     .onTapGesture { inputFocused = false }
 
-                VStack(spacing: 0) {
-                    inputSection
-                    Divider()
-                    dnsBar
-                    if engine.isRunning || !engine.statusLine.isEmpty { statusBar }
-                    if !engine.results.isEmpty && !engine.isRunning { modeBanner(engine.mode) }
-                    resultsList
-                    buildFooter
+                ScrollView {
+                    VStack(spacing: 0) {
+                        inputSection
+                        Divider()
+                        dnsBar
+                        if engine.isRunning || !engine.statusLine.isEmpty { statusBar }
+                        if !engine.results.isEmpty && !engine.isRunning { modeBanner(engine.mode) }
+                        resultsContent
+                        buildFooter
+                    }
                 }
+                .scrollDismissesKeyboard(.interactively)
             }
             .navigationTitle("Whitelist Checker")
             .navigationBarTitleDisplayMode(.inline)
@@ -145,6 +148,10 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Режим сети").font(.caption2).foregroundStyle(.secondary)
                 Text(m.rawValue).font(.subheadline.bold())
+                if let c = engine.calibration, c.whiteBps > 0, c.foreignBps > 0 {
+                    Text("эталоны: белый \(ScanEngine.human(c.whiteBps)) · чужой \(ScanEngine.human(c.foreignBps))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
             }
             Spacer()
         }
@@ -152,10 +159,17 @@ struct ContentView: View {
         .background(bannerColor(m).opacity(0.12))
     }
 
-    private var resultsList: some View {
-        List(engine.results) { r in RowView(result: r) }
-            .listStyle(.plain)
-            .scrollDismissesKeyboard(.immediately)
+    // Список — LazyVStack внутри общего ScrollView (а не отдельный List),
+    // чтобы скроллился весь экран целиком, включая альбомную ориентацию.
+    private var resultsContent: some View {
+        LazyVStack(spacing: 0) {
+            ForEach(engine.results) { r in
+                RowView(result: r)
+                    .padding(.horizontal)
+                    .padding(.vertical, 6)
+                Divider()
+            }
+        }
     }
 
     // MARK: - штамп сборки (чтобы на устройстве видеть, какая версия установлена)
