@@ -2,8 +2,9 @@ import Foundation
 import Network
 
 /// Shape-сигнал: качаем данные с host по TLS и считаем байт/секунду.
-/// Используем NWConnection (а не URLSession), чтобы форсировать .cellular
-/// даже при активном Wi-Fi — URLSession так не умеет.
+/// Используем NWConnection (а не URLSession): нужен ручной HTTP GET к произвольному
+/// IP с заданным SNI (domain fronting при калибровке) — URLSession так не умеет.
+/// Идём через основную сеть телефона (без форса интерфейса).
 enum ThroughputProbe {
 
     struct Result {
@@ -15,28 +16,26 @@ enum ThroughputProbe {
         var windowFilled: Bool
     }
 
-    /// host — домен или IP; path — что запросить; sni — имя для TLS/Host (по умолчанию = host).
+    /// host — IP или домен (для TLS SNI), connectHost — куда реально коннектиться
+    /// (если задан IP, а SNI берём из host). path — что запросить.
     /// duration — сколько секунд качать.
     static func measure(host: String,
                         path: String,
                         port: UInt16 = 443,
-                        sni: String? = nil,
-                        channel: Channel,
+                        connectHost: String? = nil,
                         duration: TimeInterval = 10.0,
                         connectTimeout: TimeInterval = 6.0) async -> Result {
 
-        let serverName = sni ?? host
+        let serverName = host
+        let dialHost = connectHost ?? host
         let tls = NWProtocolTLS.Options()
         sec_protocol_options_set_tls_server_name(tls.securityProtocolOptions, serverName)
         let params = NWParameters(tls: tls)
-        if let iface = channel.requiredInterface {
-            params.requiredInterfaceType = iface
-        }
 
         guard let nwPort = NWEndpoint.Port(rawValue: port) else {
             return Result(bytes: 0, seconds: 0, httpStatus: nil, windowFilled: false)
         }
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
+        let conn = NWConnection(host: NWEndpoint.Host(dialHost), port: nwPort, using: params)
 
         let state = TransferState()
 

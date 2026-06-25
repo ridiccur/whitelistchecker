@@ -1,21 +1,14 @@
 import Foundation
 import Network
 
-/// Block-сигнал: одна попытка TCP-handshake к host:port.
+/// Block-сигнал: одна попытка TCP-handshake к host:port через основную сеть телефона.
 /// Различает OPEN / RST / DROP по состояниям NWConnection.
-/// Форсинг канала через NWParameters.requiredInterfaceType.
 enum TCPProbe {
-    /// timeout — сколько ждать перехода в .ready прежде чем счесть DROP.
     static func probe(host: String,
                       port: UInt16 = 443,
-                      channel: Channel,
                       timeout: TimeInterval = 4.0) async -> TCPResult {
 
         let params = NWParameters.tcp
-        if let iface = channel.requiredInterface {
-            params.requiredInterfaceType = iface
-        }
-        // не хотим, чтобы система молча увела нас на другой путь
         params.prohibitExpensivePaths = false
 
         let nwHost = NWEndpoint.Host(host)
@@ -23,7 +16,6 @@ enum TCPProbe {
             return .error("bad port")
         }
         let conn = NWConnection(host: nwHost, port: nwPort, using: params)
-
         let start = DispatchTime.now()
 
         return await withCheckedContinuation { (cont: CheckedContinuation<TCPResult, Never>) in
@@ -38,11 +30,9 @@ enum TCPProbe {
                     let r = classify(err)
                     if done.resolveOnce() { conn.cancel(); cont.resume(returning: r) }
                 case .waiting(let err):
-                    // .waiting = путь пока недоступен / соединение не идёт.
-                    // Для cellular при активном Wi-Fi это нормально первые мгновения,
-                    // поэтому НЕ резолвим сразу — пусть отработает timeout ниже.
-                    // Но явный refused/unreachable в .waiting — это сигнал.
-                    if case .posix(let code) = err, code == .ECONNREFUSED {
+                    // refused/unreachable виден сразу — резолвим; иначе ждём timeout.
+                    if case .posix(let code) = err,
+                       code == .ECONNREFUSED || code == .EHOSTUNREACH || code == .ENETUNREACH {
                         if done.resolveOnce() { conn.cancel(); cont.resume(returning: .rst) }
                     }
                 default:
@@ -52,7 +42,6 @@ enum TCPProbe {
 
             conn.start(queue: .global(qos: .userInitiated))
 
-            // таймаут → DROP (пакеты в чёрную дыру)
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                 if done.resolveOnce() { conn.cancel(); cont.resume(returning: .drop) }
             }

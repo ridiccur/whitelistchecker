@@ -23,13 +23,13 @@ struct CalibrationSnapshot {
     }
 }
 
-/// Прогон обоих эталонов через выбранный канал.
+/// Прогон обоих эталонов через основную сеть телефона.
 enum Calibrator {
-    static func run(channel: Channel) async -> CalibrationSnapshot {
+    static func run() async -> CalibrationSnapshot {
         async let w = ThroughputProbe.measure(host: Anchor.white.host, path: Anchor.white.path,
-                                              channel: channel, duration: 8.0)
+                                              duration: 8.0)
         async let f = ThroughputProbe.measure(host: Anchor.foreign.host, path: Anchor.foreign.path,
-                                              channel: channel, duration: 8.0)
+                                              duration: 8.0)
         let (wr, fr) = await (w, f)
         return CalibrationSnapshot(whiteBps: wr.bps, foreignBps: fr.bps)
     }
