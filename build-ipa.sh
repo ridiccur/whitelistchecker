@@ -19,6 +19,19 @@ xcodebuild -project "$PROJ" -scheme "$SCHEME" \
 APP="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
 [ -d "$APP" ] || { echo "✗ .app не найден: $APP"; exit 1; }
 
+# --- штамп сборки: монотонный build-номер + человекочитаемая дата ---
+# CFBundleVersion растёт каждый прогон → iOS гарантированно ставит новый билд поверх,
+# а WLCBuildDate показывается в футере приложения, чтобы видеть свежесть на устройстве.
+BN_FILE=".build-number"
+BUILD_NUM=$(( $(cat "$BN_FILE" 2>/dev/null || echo 0) + 1 ))
+echo "$BUILD_NUM" > "$BN_FILE"
+BUILD_DATE="$(date '+%Y-%m-%d %H:%M')"
+PB=/usr/libexec/PlistBuddy
+"$PB" -c "Set :CFBundleVersion $BUILD_NUM" "$APP/Info.plist"
+"$PB" -c "Add :WLCBuildDate string $BUILD_DATE" "$APP/Info.plist" 2>/dev/null \
+  || "$PB" -c "Set :WLCBuildDate $BUILD_DATE" "$APP/Info.plist"
+echo "▶ Штамп сборки: build $BUILD_NUM · $BUILD_DATE"
+
 echo "▶ Упаковка в .ipa…"
 WORK="$(mktemp -d)"
 mkdir -p "$WORK/Payload"
