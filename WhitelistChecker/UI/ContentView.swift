@@ -3,35 +3,38 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var engine = ScanEngine()
     @State private var inputText: String = "ya.ru\nvk.com\n8.8.8.8\ncodeload.github.com"
-    @State private var channel: Channel = .cellular
+    @State private var mode: CheckMode = .shape
     @State private var parseErrors: [String] = []
     @State private var cidrPrompt: CIDRPrompt?
+    @FocusState private var inputFocused: Bool
 
     var body: some View {
         NavigationStack {
-            VStack(spacing: 0) {
-                inputSection
-                Divider()
-                if engine.isRunning || !engine.statusLine.isEmpty {
-                    statusBar
+            ZStack {
+                // фон-перехватчик тапа для скрытия клавиатуры
+                Color(.systemBackground)
+                    .ignoresSafeArea()
+                    .onTapGesture { inputFocused = false }
+
+                VStack(spacing: 0) {
+                    inputSection
+                    Divider()
+                    dnsBar
+                    if engine.isRunning || !engine.statusLine.isEmpty { statusBar }
+                    if !engine.results.isEmpty && !engine.isRunning { modeBanner(engine.mode) }
+                    resultsList
+                    buildFooter
                 }
-                if let mode = engine.mode as NetworkMode?, !engine.results.isEmpty, !engine.isRunning {
-                    modeBanner(mode)
-                }
-                resultsList
             }
             .navigationTitle("Whitelist Checker")
             .navigationBarTitleDisplayMode(.inline)
+            .task { await engine.refreshDNS() }
         }
         .alert(item: $cidrPrompt) { prompt in
-            Alert(
-                title: Text("Большая подсеть"),
-                message: Text(prompt.message),
-                primaryButton: .destructive(Text("Развернуть всё")) {
-                    startScan(allowLargeCIDR: true)
-                },
-                secondaryButton: .cancel(Text("Отмена"))
-            )
+            Alert(title: Text("Большая подсеть"),
+                  message: Text(prompt.message),
+                  primaryButton: .destructive(Text("Развернуть всё")) { startScan(allowLargeCIDR: true) },
+                  secondaryButton: .cancel(Text("Отмена")))
         }
     }
 
@@ -39,30 +42,34 @@ struct ContentView: View {
 
     private var inputSection: some View {
         VStack(alignment: .leading, spacing: 8) {
+            Picker("Режим", selection: $mode) {
+                ForEach(CheckMode.allCases) { m in Text(m.rawValue).tag(m) }
+            }
+            .pickerStyle(.segmented)
+            Text(mode.subtitle)
+                .font(.caption2).foregroundStyle(.secondary)
+
             Text("IP · CIDR · домен (по одному в строке)")
                 .font(.caption).foregroundStyle(.secondary)
             TextEditor(text: $inputText)
                 .font(.system(.body, design: .monospaced))
-                .frame(height: 96)
+                .frame(height: 92)
+                .scrollContentBackground(.hidden)
+                .padding(4)
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
                 .autocorrectionDisabled()
                 .textInputAutocapitalization(.never)
+                .focused($inputFocused)
 
-            HStack {
-                Picker("Канал", selection: $channel) {
-                    ForEach(Channel.allCases) { c in Text(c.rawValue).tag(c) }
-                }
-                .pickerStyle(.segmented)
-
-                Button {
-                    startScan(allowLargeCIDR: false)
-                } label: {
-                    Text(engine.isRunning ? "…" : "Проверить")
-                        .frame(maxWidth: 120)
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(engine.isRunning)
+            Button {
+                inputFocused = false
+                startScan(allowLargeCIDR: false)
+            } label: {
+                Text(engine.isRunning ? "Проверяю…" : "Проверить")
+                    .frame(maxWidth: .infinity)
             }
+            .buttonStyle(.borderedProminent)
+            .disabled(engine.isRunning)
 
             if !parseErrors.isEmpty {
                 ForEach(parseErrors, id: \.self) { e in
@@ -71,6 +78,51 @@ struct ContentView: View {
             }
         }
         .padding()
+    }
+
+    // MARK: - DNS
+
+    @ViewBuilder private var dnsBar: some View {
+        switch engine.dnsStatus {
+        case .ok(let via):
+            HStack(spacing: 6) {
+                Text("🟢 DNS: ок").font(.caption2)
+                Text("(\(engine.dnsChoice.label == "Системный" ? "система: \(via)" : engine.dnsChoice.label))")
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+            }
+            .padding(.horizontal).padding(.vertical, 5)
+        case .failed:
+            VStack(alignment: .leading, spacing: 6) {
+                Text("⛔ Системный DNS не отвечает").font(.caption.bold()).foregroundStyle(.red)
+                Text("Резолвить домены через (только для проверок в приложении):")
+                    .font(.caption2).foregroundStyle(.secondary)
+                HStack {
+                    dnsButton("Yandex \(KnownDNS.yandex)", choice: .server(KnownDNS.yandex))
+                    if let op = engine.systemDNS.first {
+                        dnsButton("Оператора \(op)", choice: .server(op))
+                    }
+                    dnsButton("Системный ↻", choice: .system)
+                }
+            }
+            .padding(.horizontal).padding(.vertical, 6)
+            .background(Color.red.opacity(0.08))
+        case .checking:
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Проверка DNS…").font(.caption2) }
+                .padding(.horizontal).padding(.vertical, 5)
+        case .unknown:
+            EmptyView()
+        }
+    }
+
+    private func dnsButton(_ title: String, choice: DNSChoice) -> some View {
+        Button(title) {
+            engine.dnsChoice = choice
+            Task { await engine.refreshDNS() }
+        }
+        .font(.caption2)
+        .buttonStyle(.bordered)
+        .tint(engine.dnsChoice == choice ? .accentColor : .secondary)
     }
 
     private var statusBar: some View {
@@ -87,47 +139,62 @@ struct ContentView: View {
         .padding(.horizontal).padding(.vertical, 6)
     }
 
-    private func modeBanner(_ mode: NetworkMode) -> some View {
+    private func modeBanner(_ m: NetworkMode) -> some View {
         HStack {
-            Text(bannerEmoji(mode)).font(.title3)
+            Text(bannerEmoji(m)).font(.title3)
             VStack(alignment: .leading, spacing: 1) {
                 Text("Режим сети").font(.caption2).foregroundStyle(.secondary)
-                Text(mode.rawValue).font(.subheadline.bold())
+                Text(m.rawValue).font(.subheadline.bold())
             }
             Spacer()
         }
         .padding(.horizontal).padding(.vertical, 8)
-        .background(bannerColor(mode).opacity(0.12))
+        .background(bannerColor(m).opacity(0.12))
     }
 
     private var resultsList: some View {
-        List(engine.results) { r in
-            RowView(result: r)
+        List(engine.results) { r in RowView(result: r) }
+            .listStyle(.plain)
+            .scrollDismissesKeyboard(.immediately)
+    }
+
+    // MARK: - штамп сборки (чтобы на устройстве видеть, какая версия установлена)
+
+    private var buildFooter: some View {
+        Text(Self.buildStamp)
+            .font(.caption2)
+            .foregroundStyle(.tertiary)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 3)
+    }
+
+    static var buildStamp: String {
+        let info = Bundle.main.infoDictionary
+        let v = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = info?["CFBundleVersion"] as? String ?? "?"
+        if let date = info?["WLCBuildDate"] as? String, !date.isEmpty {
+            return "v\(v) · build \(b) · \(date)"
         }
-        .listStyle(.plain)
+        return "v\(v) · build \(b)"
     }
 
     // MARK: - actions
 
     private func startScan(allowLargeCIDR: Bool) {
-        let (targets, errors) = InputParser.parseLines(inputText, allowLargeCIDR: allowLargeCIDR)
-        // отдельно ловим «слишком большой CIDR», чтобы показать подтверждение
         if !allowLargeCIDR {
             for line in inputText.split(whereSeparator: \.isNewline) {
                 let s = line.trimmingCharacters(in: .whitespaces)
                 guard s.contains("/") else { continue }
                 do { _ = try InputParser.parse(s, allowLargeCIDR: false) }
-                catch let e as InputError {
-                    if case .cidrTooLarge = e {
-                        cidrPrompt = CIDRPrompt(message: e.localizedDescription)
-                        return
-                    }
-                } catch {}
+                catch let e as InputError { if case .cidrTooLarge = e {
+                    cidrPrompt = CIDRPrompt(message: e.localizedDescription); return } }
+                catch {}
             }
         }
+        let (targets, errors) = InputParser.parseLines(inputText, allowLargeCIDR: allowLargeCIDR)
         parseErrors = errors
         guard !targets.isEmpty else { return }
-        engine.channel = channel
+        engine.checkMode = mode
         Task { await engine.run(targets: targets) }
     }
 
@@ -150,6 +217,4 @@ struct CIDRPrompt: Identifiable {
     let message: String
 }
 
-#Preview {
-    ContentView()
-}
+#Preview { ContentView() }

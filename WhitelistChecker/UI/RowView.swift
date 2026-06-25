@@ -44,7 +44,7 @@ struct RowView: View {
 
     private var verdictColor: Color {
         switch result.verdict {
-        case .white: return .green
+        case .white, .reachable: return .green
         case .shaped: return .orange
         case .blocked: return .red
         case .inconclusive: return .gray
