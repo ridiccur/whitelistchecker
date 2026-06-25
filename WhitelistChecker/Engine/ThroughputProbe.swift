@@ -14,17 +14,24 @@ enum ThroughputProbe {
         var bps: Double { seconds > 0 ? Double(bytes) / seconds : 0 }
         /// Поток шёл ~весь интервал (окно заполнено) — значит bps = реальный потолок.
         var windowFilled: Bool
+        /// Замеру можно верить: либо взяли заметный объём (быстрый канал успел
+        /// прокачать ≥1 МБ), либо устойчиво качали почти всё окно (медленный канал).
+        /// Если сайт отдал маленькое тело (динамический `/`, не уважает Range) —
+        /// false, и классификатор уходит на сетевой вердикт калибровки.
+        var trustworthy: Bool { windowFilled || bytes >= 1_000_000 }
     }
 
     /// host — IP или домен (для TLS SNI), connectHost — куда реально коннектиться
     /// (если задан IP, а SNI берём из host). path — что запросить.
-    /// duration — сколько секунд качать.
+    /// duration — сколько секунд качать. rangeBytes — сколько байт просим через
+    /// HTTP Range, чтобы заставить сервер отдать большое тело для замера.
     static func measure(host: String,
                         path: String,
                         port: UInt16 = 443,
                         connectHost: String? = nil,
                         duration: TimeInterval = 10.0,
-                        connectTimeout: TimeInterval = 6.0) async -> Result {
+                        connectTimeout: TimeInterval = 6.0,
+                        rangeBytes: Int = 8 * 1024 * 1024) async -> Result {
 
         let serverName = host
         let dialHost = connectHost ?? host
@@ -56,7 +63,9 @@ enum ThroughputProbe {
                 switch st {
                 case .ready:
                     state.markStart()
-                    let req = "GET \(path) HTTP/1.1\r\nHost: \(serverName)\r\nUser-Agent: WhitelistChecker/1.0\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+                    // Range заставляет CDN/статику отдать большое тело (ответ 206),
+                    // иначе на маленьком динамическом `/` нечего мерить.
+                    let req = "GET \(path) HTTP/1.1\r\nHost: \(serverName)\r\nUser-Agent: WhitelistChecker/1.0\r\nAccept: */*\r\nRange: bytes=0-\(rangeBytes - 1)\r\nConnection: close\r\n\r\n"
                     conn.send(content: req.data(using: .utf8), completion: .contentProcessed { _ in })
                     receiveLoop(conn, state: state, onEnd: finish)
                 case .failed, .cancelled:

@@ -127,7 +127,7 @@ final class ScanEngine: ObservableObject {
         let dial = probeHost(r) ?? r.target.host      // куда коннектиться
         let res = await ThroughputProbe.measure(host: sni, path: "/", connectHost: dial, duration: 10.0)
         r.speedBps = res.bps
-        r.detail = res.windowFilled ? "filled" : "short(\(res.bytes)B)"
+        r.speedTrustworthy = res.trustworthy
     }
 
     // MARK: - классификация
@@ -143,17 +143,33 @@ final class ScanEngine: ObservableObject {
         if r.target.blockOnly {           // CIDR в режиме шейпа — только доступность
             r.verdict = .reachable; r.detail = r.tcp?.short ?? ""; return
         }
-        guard let bps = r.speedBps else { r.verdict = .inconclusive; r.detail = "нет данных"; return }
         let thr = calibration?.threshold ?? 524_288
-        let filled = r.detail == "filled"
-        if bps >= 524_288 { r.verdict = .white }
-        else if filled { r.verdict = (bps >= thr) ? .white : .shaped }
-        else { r.verdict = .inconclusive }
-        if r.verdict != .inconclusive {
+
+        // 1) есть достоверный per-site замер — судим о шейпе по нему
+        if let bps = r.speedBps, r.speedTrustworthy {
+            r.verdict = (bps >= thr) ? .white : .shaped
             r.detail = "\(r.speedHuman) (порог \(Self.human(thr)))"
-        } else {
-            r.detail = "мало данных: \(r.speedHuman)"
+            return
         }
+
+        // 2) сайт не отдал тело для замера (маленький `/`, не уважает Range) →
+        //    опираемся на калибровку сети: если чужой эталон не задушен относительно
+        //    белого — шейпинга в сети нет, значит доступный сайт идёт на полной скорости.
+        if let c = calibration, c.whiteBps > 0, c.foreignBps > 0 {
+            let approx = (r.speedBps ?? 0) > 0 ? " · ~\(r.speedHuman)" : ""
+            if c.foreignBps < c.whiteBps * 0.5 {
+                r.verdict = .reachable
+                r.detail = "доступен; сеть душит чужой трафик — шейп сайта не определён\(approx)"
+            } else {
+                r.verdict = .white
+                r.detail = "доступен; шейпинга в сети не видно\(approx)"
+            }
+            return
+        }
+
+        // 3) ни замера, ни калибровки — но хост доступен
+        r.verdict = .reachable
+        r.detail = "доступен; скорость не измерена"
     }
 
     private func classifyBlock(_ r: ProbeResult) {

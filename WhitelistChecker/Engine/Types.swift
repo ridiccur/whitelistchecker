@@ -84,6 +84,7 @@ final class ProbeResult: ObservableObject, Identifiable {
     @Published var resolvedIP: String?   // для доменов — найденный IP
     @Published var tcp: TCPResult?
     @Published var speedBps: Double?
+    var speedTrustworthy = false         // можно ли судить о шейпе по speedBps
     @Published var verdict: Verdict = .pending
     @Published var detail: String = ""
 
