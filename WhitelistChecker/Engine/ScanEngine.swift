@@ -156,20 +156,19 @@ final class ScanEngine: ObservableObject {
         //    опираемся на калибровку сети: если чужой эталон не задушен относительно
         //    белого — шейпинга в сети нет, значит доступный сайт идёт на полной скорости.
         if let c = calibration, c.whiteBps > 0, c.foreignBps > 0 {
-            let approx = (r.speedBps ?? 0) > 0 ? " · ~\(r.speedHuman)" : ""
-            if c.foreignBps < c.whiteBps * 0.5 {
+            if c.shaping {
                 r.verdict = .reachable
-                r.detail = "доступен; сеть душит чужой трафик — шейп сайта не определён\(approx)"
+                r.detail = "доступен · per-site скорость не снята"
             } else {
                 r.verdict = .white
-                r.detail = "доступен; шейпинга в сети не видно\(approx)"
+                r.detail = "доступен · сеть без шейпа"
             }
             return
         }
 
         // 3) ни замера, ни калибровки — но хост доступен
         r.verdict = .reachable
-        r.detail = "доступен; скорость не измерена"
+        r.detail = "доступен · скорость не измерена"
     }
 
     private func classifyBlock(_ r: ProbeResult) {
@@ -192,8 +191,19 @@ final class ScanEngine: ObservableObject {
         let total = blocked + shaped + good
         guard total > 0 else { mode = .unknown; return }
 
-        if blocked >= max(1, total / 2) { mode = .blocklist }
-        else if shaped >= max(1, total / 3) { mode = .shaping }
+        // блокировки приоритетны
+        if blocked >= max(1, total / 2) { mode = .blocklist; return }
+
+        // Шейп определяем по эталонной калибровке (надёжный сигнал: белый CDN против
+        // чужих), а не по агрегату строк — per-site замер для большинства сайтов снять
+        // нельзя, и строки уходят в .reachable, маскируя шейп.
+        if checkMode == .shape, let c = calibration, c.whiteBps > 0, c.foreignBps > 0 {
+            mode = c.shaping ? .shaping : .open
+            return
+        }
+
+        // запасной путь (режим блокировки / калибровка не снялась) — по строкам
+        if shaped >= max(1, total / 3) { mode = .shaping }
         else if good == total { mode = .open }
         else if shaped > 0 { mode = .shaping }
         else { mode = .open }
