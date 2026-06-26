@@ -52,13 +52,17 @@ CIDR разворачивается в TCP-карту по всем адреса
 ## Автосборка через GitHub Actions
 
 К репозиторию подключён CI (`.github/workflows/build-ipa.yml`): тот же unsigned
-`.ipa` собирается на стороне GitHub, локальный Xcode не нужен.
+`.ipa` собирается на стороне GitHub, локальный Xcode не нужен. Сборка запускается
+**на каждый коммит в `main`**.
 
 **Где взять готовый `.ipa`:**
-- **Вручную:** вкладка **Actions → build-ipa → Run workflow**; по окончании файл
-  лежит в **Artifacts** прогона (`WhitelistChecker-unsigned`).
-- **По тегу версии** (`git tag v1.0.0 && git push origin v1.0.0`): сборка
-  запускается сама и прикладывает `.ipa` к **GitHub Release** этого тега.
+- **Nightly (свежий билд):** релиз **`nightly`** в разделе Releases — это
+  скользящий prerelease, который после каждого коммита в `main` пересобирается и
+  указывает на последнюю версию. Бери его для теста актуального состояния.
+- **Стабильный релиз:** push тега `vX.Y.Z` (`git tag v1.1 && git push origin v1.1`)
+  → отдельный **GitHub Release** этого тега.
+- **Вручную:** вкладка **Actions → build-ipa → Run workflow**; `.ipa` лежит в
+  **Artifacts** прогона (`WhitelistChecker-unsigned`).
 
 Скачанный `.ipa` подпиши своим сертификатом (Sideloadly / Feather / Gbox) и
 поставь на устройство. Подпись в CI не делается — для неё нужен личный

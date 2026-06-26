@@ -22,9 +22,15 @@ APP="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
 # --- штамп сборки: монотонный build-номер + человекочитаемая дата ---
 # CFBundleVersion растёт каждый прогон → iOS гарантированно ставит новый билд поверх,
 # а WLCBuildDate показывается в футере приложения, чтобы видеть свежесть на устройстве.
+# В CI номер задаётся снаружи (WLC_BUILD_NUMBER=github.run_number) — там нет
+# персистентного .build-number, а run_number монотонен сам по себе.
 BN_FILE=".build-number"
-BUILD_NUM=$(( $(cat "$BN_FILE" 2>/dev/null || echo 0) + 1 ))
-echo "$BUILD_NUM" > "$BN_FILE"
+if [ -n "${WLC_BUILD_NUMBER:-}" ]; then
+  BUILD_NUM="$WLC_BUILD_NUMBER"
+else
+  BUILD_NUM=$(( $(cat "$BN_FILE" 2>/dev/null || echo 0) + 1 ))
+  echo "$BUILD_NUM" > "$BN_FILE"
+fi
 BUILD_DATE="$(date '+%Y-%m-%d %H:%M')"
 PB=/usr/libexec/PlistBuddy
 "$PB" -c "Set :CFBundleVersion $BUILD_NUM" "$APP/Info.plist"

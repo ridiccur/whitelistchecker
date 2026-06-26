@@ -1,14 +1,17 @@
 name: build-ipa
 
 # Собирает голый (unsigned) .ipa на macOS-раннере GitHub.
-# Запуск: вручную (Actions → build-ipa → Run workflow) или push тега vX.Y.Z.
+#  • push в main           → сборка + выкладка в rolling-prerelease «nightly»
+#  • push тега vX.Y.Z       → сборка + стабильный GitHub Release
+#  • ручной запуск          → только сборка (артефакт)
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
 permissions:
-  contents: write          # нужно для публикации .ipa в Release по тегу
+  contents: write          # нужно для публикации релизов
 
 jobs:
   build:
@@ -20,7 +23,15 @@ jobs:
         run: sudo xcode-select -s /Applications/Xcode_16.app
 
       - name: Build unsigned .ipa
+        env:
+          WLC_BUILD_NUMBER: ${{ github.run_number }}   # монотонный номер сборки
         run: ./build-ipa.sh
+
+      - name: Read app version
+        id: ver
+        run: |
+          V=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" WhitelistChecker/Info.plist)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -29,9 +40,30 @@ jobs:
           path: dist/WhitelistChecker-unsigned.ipa
           if-no-files-found: error
 
-      # При push тега vX.Y.Z .ipa автоматически кладётся в GitHub Release.
-      - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: dist/WhitelistChecker-unsigned.ipa
+      # --- Nightly: один скользящий prerelease, всегда указывает на свежий main ---
+      - name: Publish nightly
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          RUN: ${{ github.run_number }}
+        run: |
+          SHA="${GITHUB_SHA:0:7}"
+          # пересоздаём тег/релиз nightly на текущем коммите
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly dist/WhitelistChecker-unsigned.ipa \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Nightly v${VERSION} (build ${RUN})" \
+            --notes "Автосборка из коммита \`${SHA}\` ($(date -u '+%Y-%m-%d %H:%M UTC')).
+          Unsigned .ipa — подпиши своим сертификатом (Sideloadly / Feather / Gbox) перед установкой."
+
+      # --- Стабильный релиз по тегу vX.Y.Z ---
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/WhitelistChecker-unsigned.ipa \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Релиз ${GITHUB_REF_NAME}. Unsigned .ipa — подпиши перед установкой." \
+          || gh release upload "${GITHUB_REF_NAME}" dist/WhitelistChecker-unsigned.ipa --clobber
