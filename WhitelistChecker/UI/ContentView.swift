@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct ContentView: View {
     @StateObject private var engine = ScanEngine()
@@ -6,6 +7,9 @@ struct ContentView: View {
     @State private var mode: CheckMode = .shape
     @State private var parseErrors: [String] = []
     @State private var cidrPrompt: CIDRPrompt?
+    @State private var showImporter = false
+    @State private var importPreview: ImportPreview?
+    @State private var shareItem: ShareItem?
     @FocusState private var inputFocused: Bool
 
     var body: some View {
@@ -33,12 +37,34 @@ struct ContentView: View {
             .navigationTitle("Whitelist Checker")
             .navigationBarTitleDisplayMode(.inline)
             .task { await engine.refreshDNS() }
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        inputFocused = false
+                        exportLog()
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .disabled(!engine.canExport || engine.isRunning)
+                }
+            }
         }
         .alert(item: $cidrPrompt) { prompt in
             Alert(title: Text("Большая подсеть"),
                   message: Text(prompt.message),
                   primaryButton: .destructive(Text("Развернуть всё")) { startScan(allowLargeCIDR: true) },
                   secondaryButton: .cancel(Text("Отмена")))
+        }
+        .fileImporter(isPresented: $showImporter,
+                      allowedContentTypes: [.plainText, .text],
+                      allowsMultipleSelection: false) { result in
+            handleImport(result)
+        }
+        .sheet(item: $importPreview) { preview in
+            importConfirmSheet(preview)
+        }
+        .sheet(item: $shareItem) { item in
+            ShareSheet(items: [item.url])
         }
     }
 
@@ -54,8 +80,20 @@ struct ContentView: View {
                 .font(.caption2).foregroundStyle(.secondary)
 
             if mode == .block {
-                Text("IP · CIDR · домен (по одному в строке)")
-                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Text("IP · CIDR · домен (по одному в строке)")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button {
+                        inputFocused = false
+                        showImporter = true
+                    } label: {
+                        Label("Импорт .txt", systemImage: "square.and.arrow.down")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                }
                 TextEditor(text: $inputText)
                     .font(.system(.body, design: .monospaced))
                     .frame(height: 92)
@@ -261,6 +299,105 @@ struct ContentView: View {
         Task { await engine.run(targets: targets) }
     }
 
+    // MARK: - импорт .txt
+
+    private func handleImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .failure(let e):
+            importPreview = ImportPreview(report: .init(validLines: [], invalid: [("", e.localizedDescription)]),
+                                          fileName: "")
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
+                importPreview = ImportPreview(report: .init(validLines: [],
+                                              invalid: [("", "не удалось прочитать файл (нужен текст UTF-8)")]),
+                                              fileName: url.lastPathComponent)
+                return
+            }
+            importPreview = ImportPreview(report: InputParser.validate(text),
+                                          fileName: url.lastPathComponent)
+        }
+    }
+
+    private func importConfirmSheet(_ preview: ImportPreview) -> some View {
+        let r = preview.report
+        return NavigationStack {
+            List {
+                Section {
+                    if !preview.fileName.isEmpty {
+                        labelRow("Файл", preview.fileName)
+                    }
+                    labelRow("Распознано", "\(r.validLines.count)")
+                    if r.ip > 0     { labelRow("• IP", "\(r.ip)") }
+                    if r.cidr > 0   { labelRow("• CIDR", "\(r.cidr)") }
+                    if r.domain > 0 { labelRow("• домены", "\(r.domain)") }
+                    if !r.invalid.isEmpty {
+                        labelRow("Пропущено (ошибки)", "\(r.invalid.count)")
+                    }
+                }
+                if !r.invalid.isEmpty {
+                    Section("Нераспознанные строки") {
+                        ForEach(Array(r.invalid.enumerated()), id: \.offset) { _, item in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.line.isEmpty ? "—" : item.line)
+                                    .font(.system(.caption, design: .monospaced))
+                                Text(item.reason).font(.caption2).foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Импорт списка")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Отмена") { importPreview = nil }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Menu("Импорт (\(r.validLines.count))") {
+                        Button("Заменить ввод") { applyImport(r, append: false) }
+                        Button("Добавить к вводу") { applyImport(r, append: true) }
+                    }
+                    .disabled(r.validLines.isEmpty)
+                }
+            }
+        }
+    }
+
+    private func applyImport(_ r: InputParser.ValidationReport, append: Bool) {
+        let imported = r.validLines.joined(separator: "\n")
+        if append {
+            let base = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
+            inputText = base.isEmpty ? imported : base + "\n" + imported
+        } else {
+            inputText = imported
+        }
+        parseErrors = []
+        importPreview = nil
+    }
+
+    private func labelRow(_ k: String, _ v: String) -> some View {
+        HStack { Text(k); Spacer(); Text(v).foregroundStyle(.secondary) }
+    }
+
+    // MARK: - экспорт лога
+
+    private func exportLog() {
+        let text = engine.exportReport()
+        let df = DateFormatter(); df.dateFormat = "yyyyMMdd-HHmmss"
+        let name = "whitelistchecker-\(df.string(from: Date())).txt"
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            shareItem = ShareItem(url: url)
+        } catch {
+            // если запись не удалась — делимся хотя бы текстом через временный путь не выйдет,
+            // поэтому просто игнорируем (кнопка останется доступной для повтора)
+        }
+    }
+
     private func bannerEmoji(_ m: NetworkMode) -> String {
         switch m {
         case .blocklist: return "⛔"; case .shaping: return "🟡"
@@ -278,6 +415,28 @@ struct ContentView: View {
 struct CIDRPrompt: Identifiable {
     let id = UUID()
     let message: String
+}
+
+/// Предпросмотр импортируемого списка перед заливкой в поле ввода.
+struct ImportPreview: Identifiable {
+    let id = UUID()
+    let report: InputParser.ValidationReport
+    let fileName: String
+}
+
+/// Обёртка для презентации share-листа по файлу отчёта.
+struct ShareItem: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Системный share-лист iOS (UIActivityViewController) — «Поделиться».
+struct ShareSheet: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ vc: UIActivityViewController, context: Context) {}
 }
 
 #Preview { ContentView() }

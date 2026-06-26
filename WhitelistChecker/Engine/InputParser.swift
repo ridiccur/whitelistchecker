@@ -76,6 +76,57 @@ struct InputParser {
         return (targets, errors)
     }
 
+    // MARK: - валидация импорта (без разворота CIDR)
+
+    /// Итог проверки импортируемого списка: что распознано и что нет.
+    struct ValidationReport {
+        var validLines: [String]                       // распознанные строки (raw, без разворота CIDR)
+        var invalid: [(line: String, reason: String)]  // нераспознанные строки с причиной
+        var ip = 0, cidr = 0, domain = 0               // счётчики по типам
+
+        var total: Int { validLines.count + invalid.count }
+        var isEmpty: Bool { total == 0 }
+    }
+
+    /// Синтаксическая проверка одной строки БЕЗ разворота подсети — для предпросмотра
+    /// импорта (большой CIDR не должен раздуваться в тысячи целей до подтверждения).
+    static func validateLine(_ s: String) throws -> TargetKind {
+        let t = s.trimmingCharacters(in: .whitespaces)
+        guard !t.isEmpty else { throw InputError.empty }
+        if t.contains("/") {
+            let parts = t.split(separator: "/")
+            guard parts.count == 2, let p = Int(parts[1]), p >= 0, p <= 32,
+                  isIPv4(String(parts[0])) else { throw InputError.badFormat(t) }
+            return .cidr
+        }
+        if isIPv4(t) { return .ip }
+        if looksLikeDomain(t) { return .domain }
+        throw InputError.badFormat(t)
+    }
+
+    /// Провалидировать многострочный текст из импортируемого .txt
+    /// (по одной цели в строке, `#` — комментарий).
+    static func validate(_ text: String) -> ValidationReport {
+        var r = ValidationReport(validLines: [], invalid: [])
+        for rawLine in text.split(whereSeparator: \.isNewline) {
+            var line = String(rawLine)
+            if let hash = line.firstIndex(of: "#") { line = String(line[..<hash]) }
+            line = line.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { continue }
+            do {
+                switch try validateLine(line) {
+                case .ip:     r.ip += 1
+                case .cidr:   r.cidr += 1
+                case .domain: r.domain += 1
+                }
+                r.validLines.append(line)
+            } catch {
+                r.invalid.append((line, error.localizedDescription))
+            }
+        }
+        return r
+    }
+
     // MARK: - CIDR
 
     static func expandCIDR(_ s: String, allowLarge: Bool) throws -> [Target] {

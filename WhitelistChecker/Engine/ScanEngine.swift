@@ -160,4 +160,70 @@ final class ScanEngine: ObservableObject {
         if b >= 1024 { return String(format: "%.0f КБ/с", b/1024) }
         return String(format: "%.0f Б/с", b)
     }
+
+    // MARK: - экспорт отчёта
+
+    /// Есть ли что экспортировать/чем делиться.
+    var canExport: Bool { !results.isEmpty || calibration != nil }
+
+    /// Подробный человекочитаемый лог последней проверки — для шаринга через iOS.
+    func exportReport() -> String {
+        let info = Bundle.main.infoDictionary
+        let v = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let b = info?["CFBundleVersion"] as? String ?? "?"
+        let df = DateFormatter()
+        df.dateFormat = "yyyy-MM-dd HH:mm:ss"
+
+        var L: [String] = []
+        L.append("WhitelistChecker — отчёт о проверке")
+        L.append("Версия: v\(v) · build \(b)")
+        L.append("Дата: \(df.string(from: Date()))")
+        L.append("Режим проверки: \(checkMode.rawValue)")
+        L.append("DNS: \(dnsStatusText)")
+        L.append("Резолвер проверок: \(dnsChoice.label)")
+        L.append("Режим сети: \(mode.rawValue)")
+
+        if let c = calibration {
+            L.append("")
+            L.append("— Калибровка эталонов —")
+            L.append(anchorLine("белый", c.white))
+            for f in c.foreign { L.append(anchorLine("чужой", f)) }
+            if c.whiteBps > 0 && c.foreignBps > 0 {
+                L.append(c.shaping
+                    ? "Итог: чужой трафик медленнее белого в \(String(format: "%.0f", c.ratio))× — шейп"
+                    : "Итог: чужой ≈ белый — шейпинга не видно")
+            } else if c.whiteBps <= 0 {
+                L.append("Итог: белый эталон не снялся — вывод по сети ненадёжен")
+            }
+        }
+
+        if !results.isEmpty {
+            L.append("")
+            L.append("— Результаты (\(results.count)) —")
+            for r in results {
+                var parts = ["[\(r.verdict.rawValue)] \(r.target.raw)"]
+                if r.target.kind == .domain, let ip = r.resolvedIP { parts.append("→ \(ip)") }
+                if let tcp = r.tcp { parts.append("| TCP \(tcp.short)") }
+                if let bps = r.speedBps { parts.append("| \(Self.human(bps))") }
+                if !r.detail.isEmpty { parts.append("| \(r.detail)") }
+                L.append(parts.joined(separator: " "))
+            }
+        }
+
+        return L.joined(separator: "\n")
+    }
+
+    private func anchorLine(_ tag: String, _ s: AnchorSample) -> String {
+        let speed = s.ok ? Self.human(s.bps) : "не отвечает"
+        return "\(tag)  \(s.host)  \(speed)"
+    }
+
+    private var dnsStatusText: String {
+        switch dnsStatus {
+        case .ok(let via): return "ок (\(via))"
+        case .failed:      return "не отвечает"
+        case .checking:    return "проверка…"
+        case .unknown:     return "—"
+        }
+    }
 }
