@@ -302,23 +302,43 @@ struct ContentView: View {
     // MARK: - импорт .txt
 
     private func handleImport(_ result: Result<[URL], Error>) {
+        let preview: ImportPreview
         switch result {
         case .failure(let e):
-            importPreview = ImportPreview(report: .init(validLines: [], invalid: [("", e.localizedDescription)]),
-                                          fileName: "")
+            preview = ImportPreview(report: .init(validLines: [], invalid: [("", e.localizedDescription)]),
+                                    fileName: "")
         case .success(let urls):
             guard let url = urls.first else { return }
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-                importPreview = ImportPreview(report: .init(validLines: [],
-                                              invalid: [("", "не удалось прочитать файл (нужен текст UTF-8)")]),
-                                              fileName: url.lastPathComponent)
-                return
+            guard let text = readText(url) else {
+                preview = ImportPreview(report: .init(validLines: [],
+                                        invalid: [("", "не удалось прочитать файл (нужен текст UTF-8/CP1251)")]),
+                                        fileName: url.lastPathComponent)
+                presentPreview(preview); return
             }
-            importPreview = ImportPreview(report: InputParser.validate(text),
-                                          fileName: url.lastPathComponent)
+            preview = ImportPreview(report: InputParser.validate(text), fileName: url.lastPathComponent)
         }
+        presentPreview(preview)
+    }
+
+    /// Презентуем лист предпросмотра ПОСЛЕ закрытия fileImporter — иначе SwiftUI
+    /// «проглатывает» вторую презентацию (новый sheet поверх ещё закрывающегося).
+    private func presentPreview(_ preview: ImportPreview) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            importPreview = preview
+        }
+    }
+
+    /// Чтение текста с запасными кодировками (списки часто не в UTF-8).
+    private func readText(_ url: URL) -> String? {
+        if let s = try? String(contentsOf: url, encoding: .utf8) { return s }
+        if let data = try? Data(contentsOf: url) {
+            for enc in [String.Encoding.windowsCP1251, .isoLatin1, .ascii] {
+                if let s = String(data: data, encoding: enc) { return s }
+            }
+        }
+        return nil
     }
 
     private func importConfirmSheet(_ preview: ImportPreview) -> some View {
