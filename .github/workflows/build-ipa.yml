@@ -46,14 +46,13 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.ver.outputs.version }}
-          RUN: ${{ github.run_number }}
         run: |
           SHA="${GITHUB_SHA:0:7}"
           # пересоздаём тег/релиз nightly на текущем коммите
           gh release delete nightly --yes --cleanup-tag || true
           gh release create nightly dist/WhitelistChecker-unsigned.ipa \
             --prerelease --target "$GITHUB_SHA" \
-            --title "Nightly v${VERSION} (build ${RUN})" \
+            --title "Nightly v${VERSION}" \
             --notes "Автосборка из коммита \`${SHA}\` ($(date -u '+%Y-%m-%d %H:%M UTC')).
           Unsigned .ipa — подпиши своим сертификатом (Sideloadly / Feather / Gbox) перед установкой."
 
