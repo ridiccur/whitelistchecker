@@ -17,3 +17,5 @@ dist/*.ipa
 
 # Build counter
 .build-number
+
+build.log

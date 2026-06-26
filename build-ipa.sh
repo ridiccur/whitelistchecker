@@ -11,10 +11,17 @@ OUT=dist
 
 echo "▶ Сборка под iphoneos без подписи…"
 rm -rf build
-xcodebuild -project "$PROJ" -scheme "$SCHEME" \
+if ! xcodebuild -project "$PROJ" -scheme "$SCHEME" \
   -configuration Release -sdk iphoneos -derivedDataPath build \
   CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-  build | tail -3
+  build > build.log 2>&1; then
+  echo "✗ Сборка упала. Диагностика:"
+  grep -nE "error:|error |actool|AppIcon|asset|\.png|The following build commands failed" build.log | tail -60 || true
+  echo "--- последние 60 строк лога ---"
+  tail -60 build.log
+  exit 1
+fi
+tail -3 build.log
 
 APP="build/Build/Products/Release-iphoneos/${APP_NAME}.app"
 [ -d "$APP" ] || { echo "✗ .app не найден: $APP"; exit 1; }
