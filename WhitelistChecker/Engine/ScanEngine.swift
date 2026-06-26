@@ -21,6 +21,23 @@ final class ScanEngine: ObservableObject {
 
     func cancelAll() { isRunning = false }
 
+    /// Прогон режима шейпа: список доменов не нужен — меряем встроенные эталоны
+    /// (белый whitelisted сервер против чужих CDN) и судим о сети по ним.
+    func runShapeCheck() async {
+        isRunning = true
+        results = []
+        mode = .unknown
+        calibration = nil
+
+        await refreshDNS()
+        statusLine = "Калибровка канала…"
+        calibration = await Calibrator.run()
+
+        computeNetworkMode()
+        statusLine = ""
+        isRunning = false
+    }
+
     /// Проверка DNS выбранным резолвером (вызывается из UI до/без скана).
     func refreshDNS() async {
         dnsStatus = .checking
@@ -36,7 +53,7 @@ final class ScanEngine: ObservableObject {
         }
     }
 
-    /// Главный прогон.
+    /// Прогон режима блокировки: TCP-handshake по списку целей.
     func run(targets: [Target]) async {
         guard !targets.isEmpty else { return }
         isRunning = true
@@ -56,29 +73,12 @@ final class ScanEngine: ObservableObject {
             }
         }
 
-        // 2) Калибровка — только в режиме шейпа и если есть throughput-цели
-        let needThroughput = checkMode == .shape && results.contains { !$0.target.blockOnly }
-        if needThroughput {
-            statusLine = "Калибровка канала…"
-            calibration = await Calibrator.run()
-        }
-
-        // 3) TCP-пробы для всех целей
+        // 2) TCP-пробы для всех целей
         statusLine = "TCP-пробы…"
         await runTCPPool()
 
-        // 4) Классификация
-        if checkMode == .shape {
-            statusLine = "Замер скорости…"
-            for r in results where !r.target.blockOnly {
-                guard isRunning else { break }
-                if case .open = r.tcp { await measureThroughput(r) }
-                classifyShape(r)
-            }
-            for r in results where r.target.blockOnly { classifyShape(r) }
-        } else {
-            for r in results { classifyBlock(r) }
-        }
+        // 3) Классификация
+        for r in results { classifyBlock(r) }
 
         computeNetworkMode()
         statusLine = ""
@@ -120,56 +120,7 @@ final class ScanEngine: ObservableObject {
         }
     }
 
-    // MARK: - throughput (shape)
-
-    private func measureThroughput(_ r: ProbeResult) async {
-        let sni = r.target.host                       // домен или IP → SNI
-        let dial = probeHost(r) ?? r.target.host      // куда коннектиться
-        let res = await ThroughputProbe.measure(host: sni, path: "/", connectHost: dial, duration: 10.0)
-        r.speedBps = res.bps
-        r.speedTrustworthy = res.trustworthy
-    }
-
     // MARK: - классификация
-
-    private func classifyShape(_ r: ProbeResult) {
-        switch r.tcp {
-        case .rst:     r.verdict = .blocked; r.detail = "TCP refused"; return
-        case .drop:    r.verdict = .blocked; r.detail = "TCP timeout"; return
-        case .dnsFail: r.verdict = .inconclusive; r.detail = "DNS не резолвится"; return
-        case .error(let e): r.verdict = .inconclusive; r.detail = e; return
-        case .open, .none: break
-        }
-        if r.target.blockOnly {           // CIDR в режиме шейпа — только доступность
-            r.verdict = .reachable; r.detail = r.tcp?.short ?? ""; return
-        }
-        let thr = calibration?.threshold ?? 524_288
-
-        // 1) есть достоверный per-site замер — судим о шейпе по нему
-        if let bps = r.speedBps, r.speedTrustworthy {
-            r.verdict = (bps >= thr) ? .white : .shaped
-            r.detail = "\(r.speedHuman) (порог \(Self.human(thr)))"
-            return
-        }
-
-        // 2) сайт не отдал тело для замера (маленький `/`, не уважает Range) →
-        //    опираемся на калибровку сети: если чужой эталон не задушен относительно
-        //    белого — шейпинга в сети нет, значит доступный сайт идёт на полной скорости.
-        if let c = calibration, c.whiteBps > 0, c.foreignBps > 0 {
-            if c.shaping {
-                r.verdict = .reachable
-                r.detail = "доступен · per-site скорость не снята"
-            } else {
-                r.verdict = .white
-                r.detail = "доступен · сеть без шейпа"
-            }
-            return
-        }
-
-        // 3) ни замера, ни калибровки — но хост доступен
-        r.verdict = .reachable
-        r.detail = "доступен · скорость не измерена"
-    }
 
     private func classifyBlock(_ r: ProbeResult) {
         switch r.tcp {
@@ -185,28 +136,23 @@ final class ScanEngine: ObservableObject {
     // MARK: - режим сети
 
     private func computeNetworkMode() {
-        let blocked = results.filter { $0.verdict == .blocked }.count
-        let shaped  = results.filter { $0.verdict == .shaped }.count
-        let good    = results.filter { $0.verdict == .white || $0.verdict == .reachable }.count
-        let total = blocked + shaped + good
-        guard total > 0 else { mode = .unknown; return }
-
-        // блокировки приоритетны
-        if blocked >= max(1, total / 2) { mode = .blocklist; return }
-
-        // Шейп определяем по эталонной калибровке (надёжный сигнал: белый CDN против
-        // чужих), а не по агрегату строк — per-site замер для большинства сайтов снять
-        // нельзя, и строки уходят в .reachable, маскируя шейп.
-        if checkMode == .shape, let c = calibration, c.whiteBps > 0, c.foreignBps > 0 {
-            mode = c.shaping ? .shaping : .open
+        // Шейп: режим определяется только эталонной калибровкой (белый whitelisted
+        // сервер против чужих CDN) — список доменов в этом режиме не участвует.
+        if checkMode == .shape {
+            if let c = calibration, c.whiteBps > 0, c.foreignBps > 0 {
+                mode = c.shaping ? .shaping : .open
+            } else {
+                mode = .unknown
+            }
             return
         }
 
-        // запасной путь (режим блокировки / калибровка не снялась) — по строкам
-        if shaped >= max(1, total / 3) { mode = .shaping }
-        else if good == total { mode = .open }
-        else if shaped > 0 { mode = .shaping }
-        else { mode = .open }
+        // Блокировка: судим по строкам TCP-проб.
+        let blocked = results.filter { $0.verdict == .blocked }.count
+        let good    = results.filter { $0.verdict == .reachable }.count
+        let total = blocked + good
+        guard total > 0 else { mode = .unknown; return }
+        mode = blocked >= max(1, total / 2) ? .blocklist : .open
     }
 
     static func human(_ b: Double) -> String {

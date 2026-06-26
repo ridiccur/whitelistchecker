@@ -22,7 +22,7 @@ struct ContentView: View {
                         Divider()
                         dnsBar
                         if engine.isRunning || !engine.statusLine.isEmpty { statusBar }
-                        if !engine.results.isEmpty && !engine.isRunning { modeBanner(engine.mode) }
+                        if engine.mode != .unknown && !engine.isRunning { modeBanner(engine.mode) }
                         if let c = engine.calibration, !engine.isRunning { calibrationPanel(c) }
                         resultsContent
                         buildFooter
@@ -53,17 +53,23 @@ struct ContentView: View {
             Text(mode.subtitle)
                 .font(.caption2).foregroundStyle(.secondary)
 
-            Text("IP · CIDR · домен (по одному в строке)")
-                .font(.caption).foregroundStyle(.secondary)
-            TextEditor(text: $inputText)
-                .font(.system(.body, design: .monospaced))
-                .frame(height: 92)
-                .scrollContentBackground(.hidden)
-                .padding(4)
-                .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .focused($inputFocused)
+            if mode == .block {
+                Text("IP · CIDR · домен (по одному в строке)")
+                    .font(.caption).foregroundStyle(.secondary)
+                TextEditor(text: $inputText)
+                    .font(.system(.body, design: .monospaced))
+                    .frame(height: 92)
+                    .scrollContentBackground(.hidden)
+                    .padding(4)
+                    .overlay(RoundedRectangle(cornerRadius: 8).stroke(.quaternary))
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .focused($inputFocused)
+            } else {
+                Text("Скорость канала меряется по встроенным эталонам: белый whitelisted сервер (зеркало Яндекса) против чужих CDN (Cloudflare, Google, GitHub). Список доменов вводить не нужно.")
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             Button {
                 inputFocused = false
@@ -75,7 +81,7 @@ struct ContentView: View {
             .buttonStyle(.borderedProminent)
             .disabled(engine.isRunning)
 
-            if !parseErrors.isEmpty {
+            if mode == .block, !parseErrors.isEmpty {
                 ForEach(parseErrors, id: \.self) { e in
                     Text("⚠ \(e)").font(.caption2).foregroundStyle(.orange)
                 }
@@ -232,6 +238,12 @@ struct ContentView: View {
     // MARK: - actions
 
     private func startScan(allowLargeCIDR: Bool) {
+        // Шейп: доменов не вводим — гоняем встроенные эталоны.
+        if mode == .shape {
+            engine.checkMode = .shape
+            Task { await engine.runShapeCheck() }
+            return
+        }
         if !allowLargeCIDR {
             for line in inputText.split(whereSeparator: \.isNewline) {
                 let s = line.trimmingCharacters(in: .whitespaces)
