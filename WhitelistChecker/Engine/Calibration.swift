@@ -16,10 +16,22 @@ enum Anchor {
     ]
 }
 
+/// Замер одного эталона — для прозрачного вывода «что реально происходит внутри».
+struct AnchorSample: Identifiable {
+    let id = UUID()
+    let host: String
+    let bps: Double
+    let ok: Bool        // удалось ли снять реальную скорость (взяли данные)
+}
+
 /// Снимок калибровки канала на момент проверки.
 struct CalibrationSnapshot {
-    let whiteBps: Double
-    let foreignBps: Double      // лучший (макс) из чужих эталонов = потолок чужого трафика
+    let white: AnchorSample          // белый (whitelisted) эталон
+    let foreign: [AnchorSample]      // чужие эталоны со своими скоростями
+
+    var whiteBps: Double { white.bps }
+    /// Потолок чужого трафика — максимум среди успешно снятых чужих эталонов.
+    var foreignBps: Double { foreign.filter(\.ok).map(\.bps).max() ?? 0 }
 
     /// Порог разделения WHITE/SHAPED — геометрическое среднее эталонов.
     /// Если эталоны не снялись — запасной абсолют.
@@ -34,6 +46,9 @@ struct CalibrationSnapshot {
     var shaping: Bool {
         whiteBps > 0 && foreignBps > 0 && foreignBps < whiteBps * 0.5
     }
+
+    /// Во сколько раз белый эталон быстрее потолка чужого трафика.
+    var ratio: Double { foreignBps > 0 ? whiteBps / foreignBps : 0 }
 }
 
 /// Прогон эталонов через основную сеть телефона: белый против пачки чужих.
@@ -41,22 +56,28 @@ enum Calibrator {
     static func run() async -> CalibrationSnapshot {
         async let whiteR = ThroughputProbe.measure(host: Anchor.white.host,
                                                    path: Anchor.white.path, duration: 8.0)
-        async let foreignBest = bestForeignBps()
-        let (wr, fb) = await (whiteR, foreignBest)
-        return CalibrationSnapshot(whiteBps: wr.bps, foreignBps: fb)
+        async let foreignS = foreignSamples()
+        let (wr, fs) = await (whiteR, foreignS)
+        let white = AnchorSample(host: Anchor.white.host, bps: wr.bps, ok: wr.trustworthy || wr.bytes > 0)
+        return CalibrationSnapshot(white: white, foreign: fs)
     }
 
-    /// Качаем все чужие эталоны параллельно, возвращаем максимальную скорость.
-    private static func bestForeignBps() async -> Double {
-        await withTaskGroup(of: Double.self) { group in
+    /// Качаем все чужие эталоны параллельно, возвращаем замер по каждому
+    /// (в порядке Anchor.foreign — для стабильного вывода).
+    private static func foreignSamples() async -> [AnchorSample] {
+        let order = Anchor.foreign.map(\.host)
+        var out = await withTaskGroup(of: AnchorSample.self) { group in
             for a in Anchor.foreign {
                 group.addTask {
-                    (await ThroughputProbe.measure(host: a.host, path: a.path, duration: 8.0)).bps
+                    let r = await ThroughputProbe.measure(host: a.host, path: a.path, duration: 8.0)
+                    return AnchorSample(host: a.host, bps: r.bps, ok: r.trustworthy || r.bytes > 0)
                 }
             }
-            var best = 0.0
-            for await bps in group { best = max(best, bps) }
-            return best
+            var acc: [AnchorSample] = []
+            for await s in group { acc.append(s) }
+            return acc
         }
+        out.sort { (order.firstIndex(of: $0.host) ?? 0) < (order.firstIndex(of: $1.host) ?? 0) }
+        return out
     }
 }

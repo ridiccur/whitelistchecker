@@ -23,6 +23,7 @@ struct ContentView: View {
                         dnsBar
                         if engine.isRunning || !engine.statusLine.isEmpty { statusBar }
                         if !engine.results.isEmpty && !engine.isRunning { modeBanner(engine.mode) }
+                        if let c = engine.calibration, !engine.isRunning { calibrationPanel(c) }
                         resultsContent
                         buildFooter
                     }
@@ -148,15 +149,51 @@ struct ContentView: View {
             VStack(alignment: .leading, spacing: 1) {
                 Text("Режим сети").font(.caption2).foregroundStyle(.secondary)
                 Text(m.rawValue).font(.subheadline.bold())
-                if let c = engine.calibration, c.whiteBps > 0, c.foreignBps > 0 {
-                    Text("эталоны: белый \(ScanEngine.human(c.whiteBps)) · чужой \(ScanEngine.human(c.foreignBps))")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
             }
             Spacer()
         }
         .padding(.horizontal).padding(.vertical, 8)
         .background(bannerColor(m).opacity(0.12))
+    }
+
+    // MARK: - что реально измерено (эталоны)
+
+    /// Прозрачный вывод калибровки: фактическая скорость каждого эталона
+    /// и итог по шейпу. Per-site точно мерить нельзя, поэтому показываем правду
+    /// по тому, что измеримо — белый whitelisted сервер против чужих CDN.
+    private func calibrationPanel(_ c: CalibrationSnapshot) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Что реально измерено").font(.caption2.bold()).foregroundStyle(.secondary)
+            anchorRow(tag: "белый", s: c.white)
+            ForEach(c.foreign) { f in anchorRow(tag: "чужой", s: f) }
+            if c.whiteBps > 0 && c.foreignBps > 0 {
+                Text(c.shaping
+                     ? "→ чужой трафик медленнее белого в \(String(format: "%.0f", c.ratio))× — это шейп"
+                     : "→ чужой ≈ белый — шейпинга не видно")
+                    .font(.caption2.bold())
+                    .foregroundStyle(c.shaping ? .orange : .green)
+            } else if c.whiteBps <= 0 {
+                Text("→ белый эталон не снялся — вывод по сети ненадёжен")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal).padding(.vertical, 6)
+        .background(Color.secondary.opacity(0.06))
+    }
+
+    private func anchorRow(tag: String, s: AnchorSample) -> some View {
+        HStack(spacing: 8) {
+            Text(tag)
+                .font(.caption2).foregroundStyle(.secondary)
+                .frame(width: 42, alignment: .leading)
+            Text(s.host)
+                .font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 6)
+            Text(s.ok ? ScanEngine.human(s.bps) : "не отвечает")
+                .font(.caption2.bold())
+                .foregroundStyle(s.ok ? .primary : .secondary)
+        }
     }
 
     // Список — LazyVStack внутри общего ScrollView (а не отдельный List),
