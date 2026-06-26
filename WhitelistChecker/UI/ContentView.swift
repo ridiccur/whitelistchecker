@@ -66,6 +66,12 @@ struct ContentView: View {
         .sheet(item: $shareItem) { item in
             ShareSheet(items: [item.url])
         }
+        .onOpenURL { url in
+            // .txt, открытый в приложение через Share/«Открыть в…» — маршрут в обход
+            // системного Document Picker (надёжнее при переподписи сторонним сертификатом).
+            mode = .block
+            openTextFile(url)
+        }
     }
 
     // MARK: - ввод
@@ -80,10 +86,19 @@ struct ContentView: View {
                 .font(.caption2).foregroundStyle(.secondary)
 
             if mode == .block {
-                HStack {
+                HStack(spacing: 8) {
                     Text("IP · CIDR · домен (по одному в строке)")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
+                    Button {
+                        inputFocused = false
+                        pasteFromClipboard()
+                    } label: {
+                        Label("Вставить", systemImage: "doc.on.clipboard")
+                            .font(.caption2)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
                     Button {
                         inputFocused = false
                         showImporter = true
@@ -302,24 +317,41 @@ struct ContentView: View {
     // MARK: - импорт .txt
 
     private func handleImport(_ result: Result<[URL], Error>) {
-        let preview: ImportPreview
         switch result {
         case .failure(let e):
-            preview = ImportPreview(report: .init(validLines: [], invalid: [("", e.localizedDescription)]),
-                                    fileName: "")
+            presentPreview(errorPreview(e.localizedDescription, file: ""))
         case .success(let urls):
             guard let url = urls.first else { return }
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let text = readText(url) else {
-                preview = ImportPreview(report: .init(validLines: [],
-                                        invalid: [("", "не удалось прочитать файл (нужен текст UTF-8/CP1251)")]),
-                                        fileName: url.lastPathComponent)
-                presentPreview(preview); return
-            }
-            preview = ImportPreview(report: InputParser.validate(text), fileName: url.lastPathComponent)
+            presentPreview(buildPreview(from: url))
         }
-        presentPreview(preview)
+    }
+
+    /// Импорт файла, открытого в приложение через Share/«Открыть в…» (onOpenURL).
+    private func openTextFile(_ url: URL) {
+        presentPreview(buildPreview(from: url))
+    }
+
+    /// Вставка списка прямо из буфера обмена — работает при любой подписи,
+    /// в обход системного Document Picker.
+    private func pasteFromClipboard() {
+        guard let text = UIPasteboard.general.string, !text.isEmpty else {
+            presentPreview(errorPreview("В буфере обмена нет текста", file: "буфер обмена"))
+            return
+        }
+        presentPreview(ImportPreview(report: InputParser.validate(text), fileName: "буфер обмена"))
+    }
+
+    private func buildPreview(from url: URL) -> ImportPreview {
+        switch readText(url) {
+        case .success(let text):
+            return ImportPreview(report: InputParser.validate(text), fileName: url.lastPathComponent)
+        case .failure(let f):
+            return errorPreview(f.reason, file: url.lastPathComponent)
+        }
+    }
+
+    private func errorPreview(_ reason: String, file: String) -> ImportPreview {
+        ImportPreview(report: .init(validLines: [], invalid: [("", reason)]), fileName: file)
     }
 
     /// Презентуем лист предпросмотра ПОСЛЕ закрытия fileImporter — иначе SwiftUI
@@ -330,16 +362,31 @@ struct ContentView: View {
         }
     }
 
-    /// Чтение текста с запасными кодировками (списки часто не в UTF-8).
-    private func readText(_ url: URL) -> String? {
-        if let s = try? String(contentsOf: url, encoding: .utf8) { return s }
-        if let data = try? Data(contentsOf: url) {
-            for enc in [String.Encoding.windowsCP1251, .isoLatin1, .ascii] {
-                if let s = String(data: data, encoding: enc) { return s }
-            }
+    /// Надёжное чтение текста: координированное чтение (NSFileCoordinator) +
+    /// security-scope + запасные кодировки. Возвращает причину ошибки текстом,
+    /// чтобы было видно, что именно пошло не так (важно при сторонней подписи).
+    private func readText(_ url: URL) -> Result<String, ReadFailure> {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+        var coordErr: NSError?
+        var data: Data?
+        var readErr: String?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &coordErr) { u in
+            do { data = try Data(contentsOf: u) }
+            catch { readErr = error.localizedDescription }
         }
-        return nil
+        if let coordErr { return .failure(.init(reason: "координация чтения: \(coordErr.localizedDescription)")) }
+        guard let data else { return .failure(.init(reason: readErr ?? "файл недоступен (проверь подпись/доступ к Файлам)")) }
+        guard !data.isEmpty else { return .failure(.init(reason: "файл пустой")) }
+
+        for enc in [String.Encoding.utf8, .windowsCP1251, .isoLatin1, .ascii] {
+            if let s = String(data: data, encoding: enc) { return .success(s) }
+        }
+        return .failure(.init(reason: "неизвестная кодировка (нужен текст UTF-8/CP1251)"))
     }
+
+    struct ReadFailure: Error { let reason: String }
 
     private func importConfirmSheet(_ preview: ImportPreview) -> some View {
         let r = preview.report
