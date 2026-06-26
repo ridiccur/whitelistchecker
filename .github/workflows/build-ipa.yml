@@ -1,0 +1,37 @@
+name: build-ipa
+
+# Собирает голый (unsigned) .ipa на macOS-раннере GitHub.
+# Запуск: вручную (Actions → build-ipa → Run workflow) или push тега vX.Y.Z.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # нужно для публикации .ipa в Release по тегу
+
+jobs:
+  build:
+    runs-on: macos-15      # на macos-15 стоит Xcode 16 (нужен для objectVersion 77)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode 16
+        run: sudo xcode-select -s /Applications/Xcode_16.app
+
+      - name: Build unsigned .ipa
+        run: ./build-ipa.sh
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: WhitelistChecker-unsigned
+          path: dist/WhitelistChecker-unsigned.ipa
+          if-no-files-found: error
+
+      # При push тега vX.Y.Z .ipa автоматически кладётся в GitHub Release.
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/WhitelistChecker-unsigned.ipa
