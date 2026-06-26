@@ -19,8 +19,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode 16
-        run: sudo xcode-select -s /Applications/Xcode_16.app
+      - name: Select latest Xcode 16.x
+        # Берём самый свежий установленный Xcode 16.x: его iphonesimulator SDK
+        # совпадает с установленным на раннере runtime симулятора. Прибитый 16.0
+        # (SDK 18.0) валит actool: нужного ему runtime iOS 18.0 на раннере нет.
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          echo "Выбран: $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
 
       - name: Build unsigned .ipa
         env:
