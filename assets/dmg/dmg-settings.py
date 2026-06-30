@@ -1,11 +1,9 @@
 # dmg-settings.py — раскладка окна .dmg для dmgbuild (pure-Python, без Finder).
-# Пути и имена приходят через -D defines из build-dmg.sh:
-#   app      — путь к WhitelistChecker.app
-#   bg       — путь к фону (assets/dmg/background.png; @2x подхватится автоматически)
+# Путь к приложению приходит через -D defines из build-dmg.sh:
+#   app — путь к WhitelistChecker.app
 import os.path
 
 app = defines.get("app", "build-mac/Build/Products/Release-maccatalyst/WhitelistChecker.app")
-bg = defines.get("bg", "assets/dmg/background.png")
 app_name = os.path.basename(app)
 
 # Сжатый образ.
@@ -15,13 +13,10 @@ format = "UDZO"
 files = [app]
 symlinks = {"Applications": "/Applications"}
 
-# Окно: позиция на экране + размер контента (должны совпадать с make-background.swift).
-window_rect = ((200, 120), (600, 400))
+# Окно: позиция на экране + размер контента. Без фоновой картинки.
+window_rect = ((200, 120), (600, 380))
 icon_size = 110
 text_size = 12
-
-# Фон (dmgbuild сам положит его в .background и подхватит background@2x.png для Retina).
-background = bg
 
 # Иконочный вид, без тулбара/статусбара/боковой панели.
 default_view = "icon-view"
@@ -32,8 +27,9 @@ show_toolbar = False
 show_pathbar = False
 show_sidebar = False
 
-# Позиции иконок (top-left, совпадают со стрелкой на фоне).
+# Позиции иконок (top-left): по горизонтали — приложение слева, ярлык справа;
+# по вертикали — выше центра окна.
 icon_locations = {
-    app_name: (150, 205),
-    "Applications": (450, 205),
+    app_name: (150, 132),
+    "Applications": (450, 132),
 }

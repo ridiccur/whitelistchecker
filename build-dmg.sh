@@ -54,17 +54,11 @@ mkdir -p "$OUT"
 DMG="$OUT/${APP_NAME}.dmg"
 rm -f "$DMG"
 
-# Фон окна .dmg: берём готовые PNG из assets/dmg (если нет — генерим Swift'ом).
-BG_DIR="assets/dmg"
-if [ ! -f "$BG_DIR/background.png" ] && [ -f "$BG_DIR/make-background.swift" ]; then
-  echo "▶ Генерация фона .dmg…"
-  swift "$BG_DIR/make-background.swift" "$BG_DIR/background.png" "$BG_DIR/background@2x.png" || true
-fi
-
-# Оформление .dmg делает dmgbuild — pure-Python, пишет .DS_Store напрямую
-# (фон + позиции иконок + размер окна), БЕЗ Finder/AppleScript. Поэтому работает
-# и в headless CI, и при тёмной теме локально, где ос'script-подход не сохраняет фон.
+# Раскладку окна .dmg (размер, крупные иконки, позиции, без тулбара/статусбара)
+# делает dmgbuild — pure-Python, пишет .DS_Store напрямую, БЕЗ Finder/AppleScript.
+# Поэтому одинаково работает локально и в headless CI. Фоновой картинки нет.
 # dmgbuild ставим в изолированный venv, чтобы не трогать системный python.
+BG_DIR="assets/dmg"
 make_styled_dmg() {
   local venv=.dmgvenv
   if [ ! -x "$venv/bin/dmgbuild" ]; then
@@ -73,8 +67,7 @@ make_styled_dmg() {
     "$venv/bin/pip" install --quiet --upgrade pip dmgbuild >/dev/null 2>&1 || return 1
   fi
   "$venv/bin/dmgbuild" -s "$BG_DIR/dmg-settings.py" \
-    -D app="$APP" -D bg="$BG_DIR/background.png" \
-    "$VOL" "$DMG" >/dev/null 2>&1
+    -D app="$APP" "$VOL" "$DMG" >/dev/null 2>&1
 }
 
 make_plain_dmg() {
@@ -86,7 +79,7 @@ make_plain_dmg() {
 }
 
 if make_styled_dmg && [ -f "$DMG" ]; then
-  echo "  ✓ оформленный .dmg (фон + раскладка через dmgbuild)"
+  echo "  ✓ оформленный .dmg (раскладка через dmgbuild)"
 else
   echo "  ⚠ dmgbuild недоступен — собираю простой .dmg"
   rm -f "$DMG"
