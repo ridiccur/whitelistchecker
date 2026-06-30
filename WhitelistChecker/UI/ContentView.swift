@@ -154,7 +154,7 @@ struct ContentView: View {
                     .font(.caption2).foregroundStyle(.secondary)
                 Spacer()
             }
-            .padding(.horizontal).padding(.vertical, 5)
+            .padding(.horizontal).padding(.vertical, 8)
         case .failed:
             VStack(alignment: .leading, spacing: 6) {
                 Text("⛔ Системный DNS не отвечает").font(.caption.bold()).foregroundStyle(.red)
@@ -168,11 +168,11 @@ struct ContentView: View {
                     dnsButton("Системный ↻", choice: .system)
                 }
             }
-            .padding(.horizontal).padding(.vertical, 6)
+            .padding(.horizontal).padding(.vertical, 9)
             .background(Color.red.opacity(0.08))
         case .checking:
             HStack(spacing: 6) { ProgressView().controlSize(.small); Text("Проверка DNS…").font(.caption2) }
-                .padding(.horizontal).padding(.vertical, 5)
+                .padding(.horizontal).padding(.vertical, 8)
         case .unknown:
             EmptyView()
         }
@@ -199,7 +199,7 @@ struct ContentView: View {
                     .font(.caption2).foregroundStyle(.tertiary)
             }
         }
-        .padding(.horizontal).padding(.vertical, 6)
+        .padding(.horizontal).padding(.vertical, 9)
     }
 
     private func modeBanner(_ m: NetworkMode) -> some View {
@@ -211,7 +211,7 @@ struct ContentView: View {
             }
             Spacer()
         }
-        .padding(.horizontal).padding(.vertical, 8)
+        .padding(.horizontal).padding(.vertical, 12)
         .background(bannerColor(m).opacity(0.12))
     }
 
@@ -221,36 +221,36 @@ struct ContentView: View {
     /// и итог по шейпу. Per-site точно мерить нельзя, поэтому показываем правду
     /// по тому, что измеримо — белый whitelisted сервер против чужих CDN.
     private func calibrationPanel(_ c: CalibrationSnapshot) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("Что реально измерено").font(.caption2.bold()).foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Что реально измерено").font(.subheadline.bold()).foregroundStyle(.secondary)
             anchorRow(tag: "белый", s: c.white)
             ForEach(c.foreign) { f in anchorRow(tag: "чужой", s: f) }
             if c.whiteBps > 0 && c.foreignBps > 0 {
                 Text(c.shaping
                      ? "→ чужой трафик медленнее белого в \(String(format: "%.0f", c.ratio))× — это шейп"
                      : "→ чужой ≈ белый — шейпинга не видно")
-                    .font(.caption2.bold())
+                    .font(.subheadline.bold())
                     .foregroundStyle(c.shaping ? .orange : .green)
             } else if c.whiteBps <= 0 {
                 Text("→ белый эталон не снялся — вывод по сети ненадёжен")
-                    .font(.caption2).foregroundStyle(.secondary)
+                    .font(.subheadline).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal).padding(.vertical, 6)
+        .padding(.horizontal).padding(.vertical, 12)
         .background(Color.secondary.opacity(0.06))
     }
 
     private func anchorRow(tag: String, s: AnchorSample) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Text(tag)
-                .font(.caption2).foregroundStyle(.secondary)
-                .frame(width: 42, alignment: .leading)
+                .font(.subheadline).foregroundStyle(.secondary)
+                .frame(width: 52, alignment: .leading)
             Text(s.host)
-                .font(.caption2.monospaced()).lineLimit(1).truncationMode(.middle)
-            Spacer(minLength: 6)
+                .font(.subheadline.monospaced()).lineLimit(1).truncationMode(.middle)
+            Spacer(minLength: 8)
             Text(s.ok ? ScanEngine.human(s.bps) : "не отвечает")
-                .font(.caption2.bold())
+                .font(.subheadline.bold())
                 .foregroundStyle(s.ok ? .primary : .secondary)
         }
     }
@@ -262,7 +262,7 @@ struct ContentView: View {
             ForEach(engine.results) { r in
                 RowView(result: r)
                     .padding(.horizontal)
-                    .padding(.vertical, 6)
+                    .padding(.vertical, 9)
                 Divider()
             }
         }
