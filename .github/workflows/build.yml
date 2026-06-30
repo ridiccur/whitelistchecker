@@ -1,0 +1,108 @@
+name: build
+
+# Собирает голый (unsigned) .ipa (iOS) и .dmg (macOS, Apple Silicon / Mac Catalyst).
+#  • push в main           → сборка обоих + выкладка в rolling-prerelease «nightly»
+#  • push тега vX.Y.Z       → сборка обоих + стабильный GitHub Release
+#  • ручной запуск          → только сборка (артефакты)
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write          # нужно для публикации релизов
+
+jobs:
+  # ---------- iOS: голый .ipa ----------
+  build-ios:
+    runs-on: macos-15      # на macos-15 стоит Xcode 16 (нужен для objectVersion 77)
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select latest Xcode 16.x
+        # Самый свежий установленный Xcode 16.x: его iphonesimulator SDK совпадает
+        # с установленным runtime симулятора. Прибитый 16.0 валит actool.
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          echo "Выбран: $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+      - name: Build unsigned .ipa
+        env:
+          WLC_BUILD_NUMBER: ${{ github.run_number }}   # монотонный номер сборки
+        run: ./build-ipa.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ipa
+          path: dist/WhitelistChecker-unsigned.ipa
+          if-no-files-found: error
+
+  # ---------- macOS: .dmg (Mac Catalyst, arm64) ----------
+  build-macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Select latest Xcode 16.x
+        run: |
+          XC=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          echo "Выбран: $XC"
+          sudo xcode-select -s "$XC"
+          xcodebuild -version
+      - name: Build unsigned .dmg
+        env:
+          WLC_BUILD_NUMBER: ${{ github.run_number }}
+        run: ./build-dmg.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dmg
+          path: dist/WhitelistChecker.dmg
+          if-no-files-found: error
+
+  # ---------- Публикация: оба артефакта в один релиз (без гонки) ----------
+  publish:
+    needs: [build-ios, build-macos]
+    if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { name: ipa, path: dist }
+      - uses: actions/download-artifact@v4
+        with: { name: dmg, path: dist }
+
+      - name: Read app version
+        id: ver
+        run: |
+          V=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" WhitelistChecker/Info.plist)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+
+      # --- Nightly: один скользящий prerelease, всегда указывает на свежий main ---
+      - name: Publish nightly
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          SHA="${GITHUB_SHA:0:7}"
+          gh release delete nightly --yes --cleanup-tag || true
+          gh release create nightly \
+            dist/WhitelistChecker-unsigned.ipa dist/WhitelistChecker.dmg \
+            --prerelease --target "$GITHUB_SHA" \
+            --title "Nightly v${VERSION}" \
+            --notes "Автосборка из коммита \`${SHA}\` ($(date -u '+%Y-%m-%d %H:%M UTC')).
+          • iOS — unsigned .ipa: подпиши своим сертификатом (Sideloadly / Feather / Gbox).
+          • macOS (Apple Silicon) — .dmg: перетащи в Applications, затем сними карантин:
+            xattr -dr com.apple.quarantine /Applications/WhitelistChecker.app"
+
+      # --- Стабильный релиз по тегу vX.Y.Z ---
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            dist/WhitelistChecker-unsigned.ipa dist/WhitelistChecker.dmg \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "Релиз ${GITHUB_REF_NAME}. iOS .ipa и macOS .dmg — unsigned, подпиши перед установкой." \
+          || { gh release upload "${GITHUB_REF_NAME}" dist/WhitelistChecker-unsigned.ipa --clobber; \
+               gh release upload "${GITHUB_REF_NAME}" dist/WhitelistChecker.dmg --clobber; }

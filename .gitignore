@@ -1,12 +1,14 @@
 # Xcode build
 build/
 build-sim/
+build-mac/
 DerivedData/
 *.xcuserstate
 xcuserdata/
 
 # Output artifacts
 dist/*.ipa
+dist/*.dmg
 
 # macOS
 .DS_Store
@@ -19,3 +21,4 @@ dist/*.ipa
 .build-number
 
 build.log
+build-mac.log
