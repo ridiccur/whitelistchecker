@@ -57,6 +57,39 @@ enum TCPResult: Equatable {
     }
 }
 
+/// Результат HTTPS/TLS-пробы — block-сигнал поверх TCP.
+/// Ловит блокировку по SNI/DPI: TCP открывается, но TLS-рукопожатие рвут.
+enum TLSProbeResult: Equatable {
+    case ok(handshakeMs: Double, httpStatus: Int?)  // рукопожатие прошло → доступен
+    case reset                                       // сброс/таймаут на handshake → SNI/DPI-блок
+    case serverTLS                                   // сервер ответил TLS (алерт/cert) → соединение есть
+    case skipped                                     // не делали (IP-цель или TCP не открыт)
+
+    var short: String {
+        switch self {
+        case .ok(let ms, let st):
+            return st != nil ? String(format: "TLS %.0fмс·HTTP %d", ms, st!)
+                             : String(format: "TLS %.0fмс", ms)
+        case .reset:     return "TLS reset"
+        case .serverTLS: return "TLS ответ"
+        case .skipped:   return "—"
+        }
+    }
+}
+
+/// Результат ICMP-пинга — справочный, на вердикт не влияет
+/// (многие хосты/CDN глушат ICMP по политике, будучи доступными).
+enum ICMPResult: Equatable {
+    case reply(ms: Double)
+    case timeout
+    var short: String {
+        switch self {
+        case .reply(let ms): return String(format: "ping %.0fмс", ms)
+        case .timeout:       return "ping —"
+        }
+    }
+}
+
 /// Итоговая классификация цели.
 enum Verdict: String {
     case white        = "WHITE"        // полная скорость — в белом списке
@@ -83,6 +116,8 @@ final class ProbeResult: ObservableObject, Identifiable {
     let target: Target
     @Published var resolvedIP: String?   // для доменов — найденный IP
     @Published var tcp: TCPResult?
+    @Published var tls: TLSProbeResult?  // HTTPS/TLS-проба (SNI/DPI-блок)
+    @Published var icmp: ICMPResult?     // ICMP-пинг (справочно)
     @Published var speedBps: Double?
     var speedTrustworthy = false         // можно ли судить о шейпе по speedBps
     @Published var verdict: Verdict = .pending

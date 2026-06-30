@@ -77,6 +77,15 @@ final class ScanEngine: ObservableObject {
         statusLine = "TCP-пробы…"
         await runTCPPool()
 
+        // 2b) HTTPS/TLS-проба для доменов с открытым TCP — ловим SNI/DPI-сброс,
+        //     который голая TCP-проба пропускает (handshake к :443 успешен).
+        statusLine = "TLS-пробы…"
+        await runHTTPSPool()
+
+        // 2c) ICMP-пинг — справочно, на вердикт не влияет.
+        statusLine = "ICMP-пинг…"
+        await runICMPPool()
+
         // 3) Классификация
         for r in results { classifyBlock(r) }
 
@@ -120,16 +129,101 @@ final class ScanEngine: ObservableObject {
         }
     }
 
+    // MARK: - HTTPS/TLS pool (block-сигнал поверх TCP)
+
+    /// Прогоняем TLS-пробу только по доменам, у которых TCP открылся: для них
+    /// важно отличить настоящий доступ от SNI/DPI-сброса на рукопожатии. Для IP-целей
+    /// SNI нет — TLS-проба бессмысленна (вердикт остаётся по TCP).
+    private func runHTTPSPool() async {
+        let all = results
+        let idx = all.indices.filter { i in
+            all[i].target.kind == .domain && all[i].resolvedIP != nil &&
+            { if case .open = all[i].tcp { return true } else { return false } }()
+        }
+        guard !idx.isEmpty else { return }
+        var index = 0
+        await withTaskGroup(of: (Int, TLSProbeResult).self) { group in
+            var inFlight = 0
+            func launch(_ k: Int) {
+                let i = idx[k]
+                let ip = all[i].resolvedIP!
+                let sni = all[i].target.host
+                group.addTask { (i, await HTTPSProbe.probe(ip: ip, serverName: sni)) }
+                inFlight += 1
+            }
+            while index < idx.count && inFlight < tcpConcurrency { launch(index); index += 1 }
+            while let (i, res) = await group.next() {
+                all[i].tls = res
+                inFlight -= 1
+                if index < idx.count && isRunning { launch(index); index += 1 }
+            }
+        }
+    }
+
+    // MARK: - ICMP pool (справочно)
+
+    /// Пингуем все цели с IPv4-адресом. Результат показывается, но на вердикт
+    /// не влияет: CDN и многие хосты глушат ICMP, оставаясь доступными.
+    private func runICMPPool() async {
+        let all = results
+        let items: [(Int, String)] = all.indices.compactMap { i in
+            let ip = all[i].target.kind == .domain ? all[i].resolvedIP : all[i].target.host
+            guard let ip, Self.isIPv4(ip) else { return nil }
+            return (i, ip)
+        }
+        guard !items.isEmpty else { return }
+        var index = 0
+        await withTaskGroup(of: (Int, ICMPResult).self) { group in
+            var inFlight = 0
+            func launch(_ k: Int) {
+                let (i, ip) = items[k]
+                group.addTask {
+                    let ms = await Task.detached(priority: .utility) { wl_icmp_ping(ip, 2000) }.value
+                    return (i, ms >= 0 ? .reply(ms: ms) : .timeout)
+                }
+                inFlight += 1
+            }
+            while index < items.count && inFlight < tcpConcurrency { launch(index); index += 1 }
+            while let (i, res) = await group.next() {
+                all[i].icmp = res
+                inFlight -= 1
+                if index < items.count && isRunning { launch(index); index += 1 }
+            }
+        }
+    }
+
+    private static func isIPv4(_ s: String) -> Bool {
+        if s.contains(":") { return false }
+        let parts = s.split(separator: ".")
+        return parts.count == 4 && parts.allSatisfy { Int($0).map { $0 >= 0 && $0 <= 255 } ?? false }
+    }
+
     // MARK: - классификация
 
     private func classifyBlock(_ r: ProbeResult) {
         switch r.tcp {
-        case .open(let ms): r.verdict = .reachable; r.detail = String(format: "connect %.0f мс", ms)
+        case .open(let ms):
+            // TCP открыт — уточняем по TLS-пробе (для доменов).
+            switch r.tls {
+            case .reset:
+                r.verdict = .blocked; r.detail = "TLS/SNI сброс (DPI)"
+            case .ok(_, let st):
+                r.verdict = .reachable
+                r.detail = st != nil ? "TLS ok · HTTP \(st!)" : "TLS ok"
+            case .serverTLS:
+                r.verdict = .reachable; r.detail = "TLS-ответ (соединение есть)"
+            case .skipped, .none:
+                r.verdict = .reachable; r.detail = String(format: "connect %.0f мс", ms)
+            }
         case .rst:          r.verdict = .blocked; r.detail = "RST (refused)"
         case .drop:         r.verdict = .blocked; r.detail = "DROP (таймаут/blackhole)"
         case .dnsFail:      r.verdict = .inconclusive; r.detail = "DNS не резолвится"
         case .error(let e): r.verdict = .inconclusive; r.detail = e
         case .none:         r.verdict = .inconclusive; r.detail = "нет данных"
+        }
+        // ICMP — справочно, дописываем в конец detail.
+        if let icmp = r.icmp {
+            r.detail += r.detail.isEmpty ? icmp.short : " · \(icmp.short)"
         }
     }
 
