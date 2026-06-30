@@ -51,13 +51,47 @@ codesign --force --deep --sign - "$APP" >/dev/null 2>&1 || true
 
 echo "▶ Сборка .dmg…"
 mkdir -p "$OUT"
-STAGE="$(mktemp -d)"
-cp -R "$APP" "$STAGE/"
-ln -s /Applications "$STAGE/Applications"   # перетащить → установить
-rm -f "$OUT/${APP_NAME}.dmg"
-hdiutil create -volname "$VOL" -srcfolder "$STAGE" -ov -format UDZO \
-  "$OUT/${APP_NAME}.dmg" >/dev/null
-rm -rf "$STAGE"
+DMG="$OUT/${APP_NAME}.dmg"
+rm -f "$DMG"
+
+# Фон окна .dmg: берём готовые PNG из assets/dmg (если нет — генерим Swift'ом).
+BG_DIR="assets/dmg"
+if [ ! -f "$BG_DIR/background.png" ] && [ -f "$BG_DIR/make-background.swift" ]; then
+  echo "▶ Генерация фона .dmg…"
+  swift "$BG_DIR/make-background.swift" "$BG_DIR/background.png" "$BG_DIR/background@2x.png" || true
+fi
+
+# Оформление .dmg делает dmgbuild — pure-Python, пишет .DS_Store напрямую
+# (фон + позиции иконок + размер окна), БЕЗ Finder/AppleScript. Поэтому работает
+# и в headless CI, и при тёмной теме локально, где ос'script-подход не сохраняет фон.
+# dmgbuild ставим в изолированный venv, чтобы не трогать системный python.
+make_styled_dmg() {
+  local venv=.dmgvenv
+  if [ ! -x "$venv/bin/dmgbuild" ]; then
+    echo "▶ Установка dmgbuild (venv)…"
+    python3 -m venv "$venv" >/dev/null 2>&1 || return 1
+    "$venv/bin/pip" install --quiet --upgrade pip dmgbuild >/dev/null 2>&1 || return 1
+  fi
+  "$venv/bin/dmgbuild" -s "$BG_DIR/dmg-settings.py" \
+    -D app="$APP" -D bg="$BG_DIR/background.png" \
+    "$VOL" "$DMG" >/dev/null 2>&1
+}
+
+make_plain_dmg() {
+  local stage; stage="$(mktemp -d)"
+  cp -R "$APP" "$stage/"
+  ln -s /Applications "$stage/Applications"
+  hdiutil create -volname "$VOL" -srcfolder "$stage" -ov -format UDZO "$DMG" >/dev/null
+  rm -rf "$stage"
+}
+
+if make_styled_dmg && [ -f "$DMG" ]; then
+  echo "  ✓ оформленный .dmg (фон + раскладка через dmgbuild)"
+else
+  echo "  ⚠ dmgbuild недоступен — собираю простой .dmg"
+  rm -f "$DMG"
+  make_plain_dmg
+fi
 
 echo "✓ Готово: $OUT/${APP_NAME}.dmg"
 ls -la "$OUT/${APP_NAME}.dmg"

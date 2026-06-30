@@ -16,6 +16,7 @@ dist/*.dmg
 # Misc
 *.swiftpm
 .build/
+.dmgvenv/
 
 # Build counter
 .build-number
